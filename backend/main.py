@@ -1,7 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
-from qdrant_client.models import PointStruct, Distance, VectorParams, Filter, FieldConditon, MatchValue
+from qdrant_client.models import PointStruct, Distance, VectorParams, Filter, FieldCondition, MatchValue, Range
 import uuid
 from qdrant_client import QdrantClient
 from groq import Groq
@@ -33,6 +33,30 @@ MAX_QUESTION_PER_SESSION=5
 
 session_usage={}
 
+def cleanupExpiredSessions():
+    current_time = int(time.time())
+
+    qdrant.delete(
+        collection_name=COLLECTION_NAME,
+        points_selector=Filter(
+            must=[
+                FieldCondition(
+                    key="expiresAt",
+                    range=Range(lt=current_time),
+                )
+            ]
+        ),
+    )
+
+    expired_sessions = []
+
+    for session_id, session in session_usage.items():
+        if current_time > session["expiresAt"]:
+            expired_sessions.append(session_id)
+
+    for session_id in expired_sessions:
+        del session_usage[session_id]
+
 def createCollectionIfNotExits():
     collections=qdrant.get_collections().collections
     collection_names=[collection.name for collection in collections]
@@ -61,11 +85,60 @@ def home():
 
 @app.post("/ask")
 def askQuestion(data: dict):
+    cleanupExpiredSessions()
     question = data["question"]
+    session_id=data["sessionId"]
+    document_id=data["documentId"]
+
+    if not question or not session_id or not document_id:
+        raise HTTPException(
+            status_code=400,
+            detail="question, sessionId, documentId are required"
+        )
+    
+    session=session_usage.get(session_id)
+
+    if not session:
+        raise HTTPException(
+            status_code=403,
+            detail="session expired or invalid. Please upload the pdf again"
+        )
+    
+    if int(time.time()) > session["expiresAt"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Session expired. Please upload the PDF again.",
+        )
+
+    if session["documentId"] != document_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid document for this session.",
+        )
+
+    if session["questionsUsed"] >= MAX_QUESTION_PER_SESSION:
+        raise HTTPException(
+            status_code=429,
+            detail="Question limit reached for this PDF.",
+        )
+
     questionVector=model.encode(question).tolist()
+
     searchResponse = qdrant.query_points(
         collection_name=COLLECTION_NAME,
         query=questionVector,
+        query_filter=Filter(
+            must=[
+                FieldCondition(
+                    key="sessionId",
+                    match=MatchValue(value=session_id),
+                ),
+                FieldCondition(
+                    key="documentId",
+                    match=MatchValue(value=document_id),
+                ),
+            ]
+        ),
         limit=3
     )
     results=searchResponse.points
@@ -89,14 +162,20 @@ def askQuestion(data: dict):
         ],
     )    
 
+    session_usage[session_id]["questionsUsed"] += 1
+
     return {
-        "answer" : response.choices[0].message.content
+        "answer" : response.choices[0].message.content,
+        "questionsUsed": session_usage[session_id]["questionsUsed"],
+        "questionsRemaining": MAX_QUESTION_PER_SESSION - session_usage[session_id]["questionsUsed"],
+        "sources": list(set([r.payload["fileName"] for r in results])),
     }
 
 @app.post("/upload-pdf")
 def uploadPdf(file: UploadFile=File(...)):
+    cleanupExpiredSessions()
     session_id=str(uuid.uuid4())
-    document_id=str(uuid.uuid4)
+    document_id=str(uuid.uuid4())
     expires_at = int(time.time()) + SESSION_EXPIRY_SECONDS
     reader=PdfReader(file.file)
     pages=reader.pages
