@@ -1,7 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
-from qdrant_client.models import PointStruct, Distance, VectorParams, Filter, FieldCondition, MatchValue, Range
+from qdrant_client.models import PointStruct, Distance, VectorParams, Filter, FieldCondition, MatchValue, Range, PayloadSchemaType
 import uuid
 from qdrant_client import QdrantClient
 from groq import Groq
@@ -26,7 +26,9 @@ model=SentenceTransformer('all-MiniLM-L6-v2')
 
 qdrant = QdrantClient(
     url=os.getenv("QDRANT_URL"),
-    api_key=os.getenv("QDRANT_API_KEY")
+    api_key=os.getenv("QDRANT_API_KEY"),
+    timeout=120,
+    prefer_grpc=True
 )
 
 groq=Groq(api_key=os.getenv("GROQ_API_KEY"))
@@ -68,8 +70,9 @@ def cleanupExpiredSessions():
         del session_usage[session_id]
 
 def createCollectionIfNotExits():
-    collections=qdrant.get_collections().collections
-    collection_names=[collection.name for collection in collections]
+    collections = qdrant.get_collections().collections
+    collection_names = [collection.name for collection in collections]
+
     if COLLECTION_NAME not in collection_names:
         qdrant.create_collection(
             collection_name=COLLECTION_NAME,
@@ -79,6 +82,23 @@ def createCollectionIfNotExits():
             ),
         )
 
+    qdrant.create_payload_index(
+        collection_name=COLLECTION_NAME,
+        field_name="expiresAt",
+        field_schema=PayloadSchemaType.INTEGER,
+    )
+
+    qdrant.create_payload_index(
+        collection_name=COLLECTION_NAME,
+        field_name="sessionId",
+        field_schema=PayloadSchemaType.KEYWORD,
+    )
+
+    qdrant.create_payload_index(
+        collection_name=COLLECTION_NAME,
+        field_name="documentId",
+        field_schema=PayloadSchemaType.KEYWORD,
+    )
 
 createCollectionIfNotExits()
 
@@ -89,13 +109,16 @@ def chunkText(text, chunkSize=500):
         chunks.append(chunk)
     return chunks
 
+@app.get("/test-qdrant")
+def test_qdrant():
+    return qdrant.get_collections()
+
 @app.get('/')
 def home():
     return {"message": "RAG is running"} 
 
 @app.post("/ask")
 def askQuestion(data: dict):
-    cleanupExpiredSessions()
     question = data.get("question")
     session_id=data.get("sessionId")
     document_id=data.get("documentId")
@@ -149,7 +172,8 @@ def askQuestion(data: dict):
                 ),
             ]
         ),
-        limit=3
+        limit=3,
+        timeout=120,
     )
     results=searchResponse.points
 
@@ -163,8 +187,6 @@ def askQuestion(data: dict):
     
     prompt = f"""
     Answer the question using only the context below.
-    If the answer is not present in the context, say:
-    "I could not find this information in the uploaded PDF."
 
     Context:
     {context}
@@ -191,7 +213,6 @@ def askQuestion(data: dict):
 
 @app.post("/upload-pdf")
 def uploadPdf(file: UploadFile=File(...)):
-    cleanupExpiredSessions()
     session_id=str(uuid.uuid4())
     document_id=str(uuid.uuid4())
     expires_at = int(time.time()) + SESSION_EXPIRY_SECONDS
@@ -229,7 +250,8 @@ def uploadPdf(file: UploadFile=File(...)):
 
     qdrant.upsert(
         collection_name=COLLECTION_NAME,
-        points=points
+        points=points,
+        wait=False
     )
 
     session_usage[session_id] = {
