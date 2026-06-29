@@ -86,9 +86,9 @@ def home():
 @app.post("/ask")
 def askQuestion(data: dict):
     cleanupExpiredSessions()
-    question = data["question"]
-    session_id=data["sessionId"]
-    document_id=data["documentId"]
+    question = data.get("question")
+    session_id=data.get("sessionId")
+    document_id=data.get("documentId")
 
     if not question or not session_id or not document_id:
         raise HTTPException(
@@ -143,9 +143,18 @@ def askQuestion(data: dict):
     )
     results=searchResponse.points
 
+    if not results:
+        raise HTTPException(
+            status_code=404,
+            detail="No relevant content found."
+        )
+
     context="\n\n".join([r.payload["text"] for r in results])
-    prompt=f"""
+    
+    prompt = f"""
     Answer the question using only the context below.
+    If the answer is not present in the context, say:
+    "I could not find this information in the uploaded PDF."
 
     Context:
     {context}
@@ -153,7 +162,6 @@ def askQuestion(data: dict):
     Question:
     {question}
     """
-
 
     response=groq.chat.completions.create(
         model="llama-3.1-8b-instant",
@@ -183,7 +191,14 @@ def uploadPdf(file: UploadFile=File(...)):
     for page in pages:
         text += (page.extract_text() or "") + "\n"
     
+    if not text.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="No readable text found in this PDF."
+        )
+    
     chunks=chunkText(text)
+
 
     points=[]
     for chunk in chunks:
