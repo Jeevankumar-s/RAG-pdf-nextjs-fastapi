@@ -109,6 +109,10 @@ def chunkText(text, chunkSize=500):
         chunks.append(chunk)
     return chunks
 
+@app.get("/health")
+def health():
+    return {"status":"ok"}
+
 @app.get("/test-qdrant")
 def test_qdrant():
     return qdrant.get_collections()
