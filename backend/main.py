@@ -9,10 +9,18 @@ import os
 from dotenv import load_dotenv
 import time
 from fastapi.middleware.cors import CORSMiddleware
+from auth import verify_docs
+from fastapi import Depends
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.openapi.utils import get_openapi
 
 load_dotenv()
 
-app=FastAPI()
+app=FastAPI(
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -22,7 +30,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-model=SentenceTransformer('all-MiniLM-L6-v2')
+model = None
+
+def get_model():
+    global model
+    if model is None:
+        model = SentenceTransformer("all-MiniLM-L6-v2")
+    return model
 
 qdrant = QdrantClient(
     url=os.getenv("QDRANT_URL"),
@@ -121,6 +135,21 @@ def test_qdrant():
 def home():
     return {"message": "RAG is running"} 
 
+@app.get("/docs", include_in_schema=False)
+def custom_docs(user: str = Depends(verify_docs)):
+    return get_swagger_ui_html(
+        openapi_url="/openapi.json",
+        title="API Docs",
+    )
+
+@app.get("/openapi.json", include_in_schema=False)
+def openapi(user: str = Depends(verify_docs)):
+    return get_openapi(
+        title=app.title,
+        version=app.version,
+        routes=app.routes,
+    )
+
 @app.post("/ask")
 def askQuestion(data: dict):
     question = data.get("question")
@@ -159,7 +188,7 @@ def askQuestion(data: dict):
             detail="Question limit reached for this PDF.",
         )
 
-    questionVector=model.encode(question).tolist()
+    questionVector=get_model().encode(question).tolist()
 
     searchResponse = qdrant.query_points(
         collection_name=COLLECTION_NAME,
@@ -237,7 +266,7 @@ def uploadPdf(file: UploadFile=File(...)):
 
     points=[]
     for chunk in chunks:
-        vector = model.encode(chunk).tolist()
+        vector = get_model().encode(chunk).tolist()
         points.append(
             PointStruct(
                 id=str(uuid.uuid4()),
