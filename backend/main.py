@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 from qdrant_client.models import PointStruct, Distance, VectorParams, Filter, FieldCondition, MatchValue, Range, PayloadSchemaType
@@ -13,6 +13,11 @@ from auth import verify_docs
 from fastapi import Depends
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi import _rate_limit_exceeded_handler
 
 load_dotenv()
 
@@ -29,6 +34,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter=limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler )
+app.add_middleware(SlowAPIMiddleware)
 
 model = None
 
@@ -129,7 +139,8 @@ def health():
     return {"status":"ok"}
 
 @app.get("/test-qdrant")
-def test_qdrant():
+@limiter.limit("10/minute")
+def test_qdrant(request:Request):
     return qdrant.get_collections()
 
 @app.get('/')
@@ -137,7 +148,8 @@ def home():
     return {"message": "RAG is running"} 
 
 @app.get("/docs", include_in_schema=False)
-def custom_docs(user: str = Depends(verify_docs)):
+@limiter.limit("10/minute")
+def custom_docs(request:Request, user: str = Depends(verify_docs)):
     return get_swagger_ui_html(
         openapi_url="/openapi.json",
         title="API Docs",
@@ -152,7 +164,8 @@ def openapi(user: str = Depends(verify_docs)):
     )
 
 @app.post("/ask")
-def askQuestion(data: dict):
+@limiter.limit("10/minute")
+def askQuestion(request: Request, data: dict):
     question = data.get("question")
     session_id=data.get("sessionId")
     document_id=data.get("documentId")
@@ -246,7 +259,8 @@ def askQuestion(data: dict):
     }
 
 @app.post("/upload-pdf")
-def uploadPdf(file: UploadFile=File(...)):
+@limiter.limit("5/minute")
+def uploadPdf(request: Request, file: UploadFile=File(...)):
     session_id=str(uuid.uuid4())
     document_id=str(uuid.uuid4())
     expires_at = int(time.time()) + SESSION_EXPIRY_SECONDS
