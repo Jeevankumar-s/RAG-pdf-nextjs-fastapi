@@ -134,6 +134,7 @@ def createCollectionIfNotExits():
 
 if os.getenv("ENV") != "test":
     createCollectionIfNotExits()
+    logger.info("Application initialized successfully")
 
 def chunkText(text, chunkSize=500):
     chunks=[]
@@ -178,41 +179,54 @@ def askQuestion(request: Request, data: dict):
     session_id=data.get("sessionId")
     document_id=data.get("documentId")
 
-    logger.info("Question received: session=%s document=%s", question, session_id, document_id)
+    logger.info(
+    "Question received: question=%s session=%s document=%s",
+    question,
+    session_id,
+    document_id,
+)
 
     if not question or not session_id or not document_id:
+        logger.warning(
+        "Missing required fields: question=%s sessionId=%s documentId=%s",
+        question,
+        session_id,
+        document_id,
+        )
         raise HTTPException(
             status_code=400,
             detail="question, sessionId, documentId are required"
         )
     
-    logger.warning("question, sessionId, documentId are required: %s", question, session_id, document_id)
 
     session=session_usage.get(session_id)
 
     if not session:
+        logger.warning("Invalid or expired session: %s", session_id)
         raise HTTPException(
             status_code=403,
             detail="Session expired or invalid. Please upload the PDF again."
         )
     
-    logger.warning("Invalid or expired session: %s", session_id)
 
     if int(time.time()) > session["expiresAt"]:
+        logger.warning(
+        "Session expired: %s",
+        session_id,
+        )
         raise HTTPException(
             status_code=403,
             detail="Session expired. Please upload the PDF again.",
         )
 
-    logger.info("session timeout")
 
     if session["documentId"] != document_id:
+        logger.warning("Invalid document for this session: %s",document_id)
         raise HTTPException(
             status_code=403,
             detail="Invalid document for this session.",
         )
 
-    logger.warning("Invalid document for this session: %s",document_id)
 
     if session["questionsUsed"] >= MAX_QUESTION_PER_SESSION:
         raise HTTPException(
