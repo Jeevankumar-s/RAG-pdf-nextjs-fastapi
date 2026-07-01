@@ -174,10 +174,11 @@ def openapi(user: str = Depends(verify_docs)):
 @app.post("/ask")
 @limiter.limit("10/minute")
 def askQuestion(request: Request, data: dict):
-    logger.info("Question received: session=%s document=%s", session_id, document_id)
     question = data.get("question")
     session_id=data.get("sessionId")
     document_id=data.get("documentId")
+
+    logger.info("Question received: session=%s document=%s", question, session_id, document_id)
 
     if not question or not session_id or not document_id:
         raise HTTPException(
@@ -280,6 +281,19 @@ def askQuestion(request: Request, data: dict):
 @app.post("/upload-pdf")
 @limiter.limit("5/minute")
 def uploadPdf(request: Request, file: UploadFile=File(...)):
+
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only PDF files are allowed."
+        )
+
+    if file.content_type != "application/pdf":
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid file type. Please upload a PDF."
+        )
+
     logger.info("PDF upload started: %s", file.filename)
     session_id=str(uuid.uuid4())
     document_id=str(uuid.uuid4())
