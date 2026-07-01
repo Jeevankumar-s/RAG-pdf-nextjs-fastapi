@@ -26,3 +26,9 @@ jobs:
             
             - run: pip install -r requirements.txt
             - run: python -m pytest
+              env:
+                 GROQ_API_KEY: dummy
+                 QDRANT_URL: http://localhost:6333
+                 QDRANT_API_KEY: dummy
+                 DOCS_USERNAME: test
+                 DOCS_PASSWORD: test123
