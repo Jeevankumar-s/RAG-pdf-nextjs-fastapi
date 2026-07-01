@@ -114,7 +114,8 @@ def createCollectionIfNotExits():
         field_schema=PayloadSchemaType.KEYWORD,
     )
 
-createCollectionIfNotExits()
+if os.getenv("ENV") != "test":
+    createCollectionIfNotExits()
 
 def chunkText(text, chunkSize=500):
     chunks=[]
