@@ -13,3 +13,20 @@ def test_home():
     assert response.status_code==200
     assert response.json()["message"]=="RAG is running"
 
+def test_docs_require_auth():
+    response = client.get("/docs")
+    assert response.status_code==401
+
+def test_ask_missing_field():
+    response = client.post("/ask", json={})
+    assert response.status_code==400
+    assert response.json()["detail"]=="question, sessionId, documentId are required"
+
+def test_ask_incorrect_fields():
+    response = client.post('/ask', json={
+        "question":"who is Jeevan",
+        "sessionId":"wrong-id-1234",
+        "documentId":"wrong-id-1234"
+    })
+    assert response.status_code==403
+    assert response.json()["detail"]=="Session expired or invalid. Please upload the PDF again."

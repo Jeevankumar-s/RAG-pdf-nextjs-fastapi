@@ -167,7 +167,7 @@ def askQuestion(data: dict):
     if not session:
         raise HTTPException(
             status_code=403,
-            detail="session expired or invalid. Please upload the pdf again"
+            detail="Session expired or invalid. Please upload the PDF again."
         )
     
     if int(time.time()) > session["expiresAt"]:
