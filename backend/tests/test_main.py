@@ -30,3 +30,15 @@ def test_ask_incorrect_fields():
     })
     assert response.status_code==403
     assert response.json()["detail"]=="Session expired or invalid. Please upload the PDF again."
+
+def test_ask_rate_limit():
+    payload={
+        "question":"who is jeevan",
+        "sessionId":"test-123",
+        "documentId":"test-321"
+    }
+    for _ in range(10):
+        response = client.post("/ask", json=payload)
+
+    response = client.post('/ask', json=payload)
+    assert response.json()["error"] == "Rate limit exceeded: 10 per 1 minute"
