@@ -18,8 +18,16 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi import _rate_limit_exceeded_handler
+import logging
 
 load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+)
+
+logger=logging.getLogger(__name__)
 
 app=FastAPI(
     docs_url=None,
@@ -166,6 +174,7 @@ def openapi(user: str = Depends(verify_docs)):
 @app.post("/ask")
 @limiter.limit("10/minute")
 def askQuestion(request: Request, data: dict):
+    logger.info("Question received: session=%s document=%s", session_id, document_id)
     question = data.get("question")
     session_id=data.get("sessionId")
     document_id=data.get("documentId")
@@ -176,6 +185,8 @@ def askQuestion(request: Request, data: dict):
             detail="question, sessionId, documentId are required"
         )
     
+    logger.warning("question, sessionId, documentId are required: %s", question, session_id, document_id)
+
     session=session_usage.get(session_id)
 
     if not session:
@@ -184,17 +195,23 @@ def askQuestion(request: Request, data: dict):
             detail="Session expired or invalid. Please upload the PDF again."
         )
     
+    logger.warning("Invalid or expired session: %s", session_id)
+
     if int(time.time()) > session["expiresAt"]:
         raise HTTPException(
             status_code=403,
             detail="Session expired. Please upload the PDF again.",
         )
 
+    logger.info("session timeout")
+
     if session["documentId"] != document_id:
         raise HTTPException(
             status_code=403,
             detail="Invalid document for this session.",
         )
+
+    logger.warning("Invalid document for this session: %s",document_id)
 
     if session["questionsUsed"] >= MAX_QUESTION_PER_SESSION:
         raise HTTPException(
@@ -249,6 +266,8 @@ def askQuestion(request: Request, data: dict):
         ],
     )    
 
+    logger.info("Answer generated successfully: session=%s", session_id)
+
     session_usage[session_id]["questionsUsed"] += 1
 
     return {
@@ -261,6 +280,7 @@ def askQuestion(request: Request, data: dict):
 @app.post("/upload-pdf")
 @limiter.limit("5/minute")
 def uploadPdf(request: Request, file: UploadFile=File(...)):
+    logger.info("PDF upload started: %s", file.filename)
     session_id=str(uuid.uuid4())
     document_id=str(uuid.uuid4())
     expires_at = int(time.time()) + SESSION_EXPIRY_SECONDS
@@ -278,6 +298,7 @@ def uploadPdf(request: Request, file: UploadFile=File(...)):
     
     chunks=chunkText(text)
 
+    logger.info("PDF processed: %s, pages=%s, chunks=%s", file.filename, len(reader.pages), len(chunks))
 
     points=[]
     for chunk in chunks:
@@ -301,6 +322,8 @@ def uploadPdf(request: Request, file: UploadFile=File(...)):
         points=points,
         wait=False
     )
+
+    logger.info("PDF vectors uploaded to Qdrant: session=%s document=%s", session_id, document_id)
 
     session_usage[session_id] = {
     "documentId": document_id,
