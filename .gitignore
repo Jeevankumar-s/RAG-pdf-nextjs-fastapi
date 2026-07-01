@@ -4,7 +4,7 @@ backend/.env
 backend/__pycache__/
 backend/tests/__pycache__/
 backend/uploads/
-backend/k8s/secret.yml
+backend/k8s/secret.yaml
 
 
 # Frontend
