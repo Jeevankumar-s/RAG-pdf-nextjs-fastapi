@@ -74,6 +74,7 @@ if hf_token:
 COLLECTION_NAME="documents"
 SESSION_EXPIRY_SECONDS=600
 MAX_QUESTION_PER_SESSION=5
+MAX_FILE_SIZE = 10 * 1024 * 1024  
 
 session_usage={}
 
@@ -297,16 +298,40 @@ def askQuestion(request: Request, data: dict):
 def uploadPdf(request: Request, file: UploadFile=File(...)):
 
     if not file.filename.lower().endswith(".pdf"):
+        logger.warning(
+        "Rejected upload. Invalid extension: %s",
+        file.filename,
+        )
         raise HTTPException(
             status_code=400,
             detail="Only PDF files are allowed."
         )
 
     if file.content_type != "application/pdf":
+        logger.warning(
+        "Rejected upload. Invalid MIME type: %s",
+        file.content_type,
+        )
         raise HTTPException(
             status_code=400,
             detail="Invalid file type. Please upload a PDF."
         )
+    
+    contents = file.file.read()
+    file_size=len(contents)
+    
+    if file_size > MAX_FILE_SIZE:
+        logger.warning(
+        "PDF exceeds size limit: %s (%d bytes)",
+        file.filename,
+        file_size,
+        )
+        raise HTTPException(
+            status_code=413,
+            detail="PDF file size should be less than 10 MB."
+        )
+
+    file.file.seek(0)
 
     logger.info("PDF upload started: %s", file.filename)
     session_id=str(uuid.uuid4())
