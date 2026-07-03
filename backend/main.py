@@ -56,16 +56,24 @@ def get_model():
         model = SentenceTransformer("all-MiniLM-L6-v2")
     return model
 
-qdrant = QdrantClient(
-    url=os.getenv("QDRANT_URL"),
-    api_key=os.getenv("QDRANT_API_KEY"),
-    timeout=120,
-    prefer_grpc=True
-)
-
 groq=Groq(api_key=os.getenv("GROQ_API_KEY"))
-
 hf_token=os.getenv("HF_TOKEN")
+APP_ENV = os.getenv("APP_ENV", "local")
+
+if APP_ENV == "production":
+    qdrant = QdrantClient(
+        url=os.getenv("QDRANT_CLOUD_URL"),
+        api_key=os.getenv("QDRANT_API_KEY"),
+        timeout=120,
+        prefer_grpc=True,
+    )
+else:
+    qdrant = QdrantClient(
+        url=os.getenv("QDRANT_LOCAL_URL", "http://localhost:6333"),
+        api_key=None,
+        timeout=120,
+        prefer_grpc=False,
+    )
 
 if hf_token:
     os.environ["HF_TOKEN"]=hf_token
