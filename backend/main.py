@@ -43,7 +43,7 @@ print(FRONT_END_URL)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[FRONT_END_URL],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -72,9 +72,9 @@ if APP_ENV == "production":
 else:
     qdrant = QdrantClient(
         url=os.getenv("QDRANT_LOCAL_URL", "http://localhost:6333"),
-        api_key=os.getenv("QDRANT_API_KEY"),
+        api_key=None,
         timeout=120,
-        prefer_grpc=True,
+        prefer_grpc=False,
     )
 
 if hf_token:
