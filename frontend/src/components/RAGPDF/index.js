@@ -34,6 +34,7 @@ const RAGPDF = () => {
   const [sessionId, setSessionId] = useState("");
   const [documentId, setDocumentId] = useState("");
   const [uploadMeta, setUploadMeta] = useState(null);
+  const [isStreaming, setIsStreaming] = useState(false);
   const [questionStats, setQuestionStats] = useState({
     used: 0,
     remaining: 0,
@@ -51,7 +52,7 @@ const RAGPDF = () => {
   const canAsk =
     fileUploaded &&
     question.trim().length > 0 &&
-    !askMutation.isPending &&
+    !isStreaming &&
     sessionSecondsRemaining > 0 &&
     questionStats.remaining > 0;
 
@@ -112,119 +113,203 @@ const RAGPDF = () => {
     }
   };
 
-const handleAskQuestion = () => {
-  const trimmedQuestion = question.trim();
+  // const handleAskQuestion = () => {
+  //   const trimmedQuestion = question.trim();
 
-  if (!trimmedQuestion) {
-    setError("Please enter a question.");
-    return;
-  }
+  //   if (!trimmedQuestion) {
+  //     setError("Please enter a question.");
+  //     return;
+  //   }
 
-  if (!fileUploaded) {
-    setError("Please upload a PDF first.");
-    return;
-  }
+  //   if (!fileUploaded) {
+  //     setError("Please upload a PDF first.");
+  //     return;
+  //   }
 
-  if (questionStats.remaining <= 0) {
-    setError("Question limit reached for this PDF.");
-    return;
-  }
+  //   if (questionStats.remaining <= 0) {
+  //     setError("Question limit reached for this PDF.");
+  //     return;
+  //   }
 
-  if (sessionSecondsRemaining <= 0) {
-    setError("Session expired. Please upload the PDF again.");
-    return;
-  }
+  //   if (sessionSecondsRemaining <= 0) {
+  //     setError("Session expired. Please upload the PDF again.");
+  //     return;
+  //   }
 
-  const userMessage = {
-    id: crypto.randomUUID(),
-    role: "user",
-    content: trimmedQuestion,
-  };
+  //   const userMessage = {
+  //     id: crypto.randomUUID(),
+  //     role: "user",
+  //     content: trimmedQuestion,
+  //   };
 
-  setMessages((currentMessages) => [...currentMessages, userMessage]);
-  setQuestion("");
-  setError("");
+  //   setMessages((currentMessages) => [...currentMessages, userMessage]);
+  //   setQuestion("");
+  //   setError("");
 
-  const payload = {
-    question: trimmedQuestion,
-    sessionId,
-    documentId,
-  };
+  //   const payload = {
+  //     question: trimmedQuestion,
+  //     sessionId,
+  //     documentId,
+  //   };
 
-  askMutation.mutate(payload, {
-    onSuccess: ({ data }) => {
-      const { answer, questionsUsed, questionsRemaining, sources = [] } = data;
+  //   askMutation.mutate(payload, {
+  //     onSuccess: ({ data }) => {
+  //       const { answer, questionsUsed, questionsRemaining, sources = [] } = data;
 
-      setMessages((currentMessages) => [
-        ...currentMessages,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: answer,
-          sources,
-        },
-      ]);
+  //       setMessages((currentMessages) => [
+  //         ...currentMessages,
+  //         {
+  //           id: crypto.randomUUID(),
+  //           role: "assistant",
+  //           content: answer,
+  //           sources,
+  //         },
+  //       ]);
 
-      setQuestionStats((currentStats) => ({
-        used: questionsUsed ?? currentStats.used,
-        remaining: questionsRemaining ?? currentStats.remaining,
-        max:
-          currentStats.max ||
-          (questionsUsed ?? 0) + (questionsRemaining ?? 0),
-      }));
-    },
+  //       setQuestionStats((currentStats) => ({
+  //         used: questionsUsed ?? currentStats.used,
+  //         remaining: questionsRemaining ?? currentStats.remaining,
+  //         max:
+  //           currentStats.max ||
+  //           (questionsUsed ?? 0) + (questionsRemaining ?? 0),
+  //       }));
+  //     },
 
-    onError: (error) => {
-      setMessages((currentMessages) =>
-        currentMessages.filter((message) => message.id !== userMessage.id),
+  //     onError: (error) => {
+  //       setMessages((currentMessages) =>
+  //         currentMessages.filter((message) => message.id !== userMessage.id),
+  //       );
+
+  //       setError(error.response?.data?.detail || "Failed to get answer.");
+  //     },
+  //   });
+  // };
+
+  const handleAskQuestion = () => {
+    const trimmedQuestion = question.trim();
+
+    if (!trimmedQuestion) return;
+
+    const userMessage = {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: trimmedQuestion,
+    };
+
+    const assistantId = crypto.randomUUID();
+
+    setMessages((prev) => [
+      ...prev,
+      userMessage,
+      {
+        id: assistantId,
+        role: "assistant",
+        content: "",
+        sources: [],
+      },
+    ]);
+
+    setQuestion("");
+    setError("");
+    setIsStreaming(true);
+
+    const wsUrl = process.env.NEXT_PUBLIC_API_URL.replace(
+      "http://",
+      "ws://",
+    ).replace("https://", "wss://");
+
+    const socket = new WebSocket(`${wsUrl}/ws/ask`);
+
+    socket.onopen = () => {
+      socket.send(
+        JSON.stringify({
+          question: trimmedQuestion,
+          sessionId,
+          documentId,
+        }),
       );
+    };
 
-      setError(error.response?.data?.detail || "Failed to get answer.");
-    },
-  });
-};
+    socket.onmessage = (event) => {
+      const data = JSON.parse(event.data);
 
-const handleSubmit = () => {
-  if (!file) {
-    setError("Please choose a PDF file.");
-    return;
-  }
+      if (data.type === "token") {
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === assistantId
+              ? { ...msg, content: msg.content + data.content }
+              : msg,
+          ),
+        );
+      }
 
-  setError("");
+      if (data.type === "done") {
+        setQuestionStats((currentStats) => ({
+          used: data.questionsUsed ?? currentStats.used,
+          remaining: data.questionsRemaining ?? currentStats.remaining,
+          max:
+            currentStats.max ||
+            (data.questionsUsed ?? 0) + (data.questionsRemaining ?? 0),
+        }));
 
-  const formData = new FormData();
-  formData.append("file", file);
+        setIsStreaming(false);
+        socket.close();
+      }
 
-  uploadMutation.mutate(formData, {
-    onSuccess: ({ data }) => {
-      setDocumentId(data.documentId);
-      setSessionId(data.sessionId);
-      setUploadMeta(data);
+      if (data.type === "error") {
+        setError(data.message || "Failed to get answer.");
+        setIsStreaming(false);
+        socket.close();
+      }
+    };
 
-      setQuestionStats({
-        used: 0,
-        remaining: data.maxQuestions ?? 0,
-        max: data.maxQuestions ?? 0,
-      });
+    socket.onerror = () => {
+      setError("WebSocket connection failed.");
+      setIsStreaming(false);
+    };
+  };
 
-      setSessionSecondsRemaining(data.expiresInSeconds ?? null);
+  const handleSubmit = () => {
+    if (!file) {
+      setError("Please choose a PDF file.");
+      return;
+    }
 
-      setMessages([
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content:
-            "PDF uploaded successfully. Ask a question and I will answer using only this document.",
-          sources: [data.fileName].filter(Boolean),
-        },
-      ]);
-    },
+    setError("");
 
-    onError: (error) => {
-      setError(error.response?.data?.detail || "Failed to upload PDF.");
-    },
-  });
-};
+    const formData = new FormData();
+    formData.append("file", file);
+
+    uploadMutation.mutate(formData, {
+      onSuccess: ({ data }) => {
+        setDocumentId(data.documentId);
+        setSessionId(data.sessionId);
+        setUploadMeta(data);
+
+        setQuestionStats({
+          used: 0,
+          remaining: data.maxQuestions ?? 0,
+          max: data.maxQuestions ?? 0,
+        });
+
+        setSessionSecondsRemaining(data.expiresInSeconds ?? null);
+
+        setMessages([
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content:
+              "PDF uploaded successfully. Ask a question and I will answer using only this document.",
+            sources: [data.fileName].filter(Boolean),
+          },
+        ]);
+      },
+
+      onError: (error) => {
+        setError(error.response?.data?.detail || "Failed to upload PDF.");
+      },
+    });
+  };
 
   const handleQuestionKeyDown = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -444,7 +529,7 @@ const handleSubmit = () => {
                     </article>
                   ))}
 
-                  {askMutation.isPending && (
+                  {isStreaming && (
                     <article className="flex gap-4">
                       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-[#10a37f] text-sm font-semibold text-white">
                         <Bot className="h-4 w-4" aria-hidden="true" />
@@ -463,7 +548,7 @@ const handleSubmit = () => {
 
               {error && (
                 <div className="mt-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                  {error}
+                  {/* {error} */}
                 </div>
               )}
             </div>
@@ -484,7 +569,7 @@ const handleSubmit = () => {
                   }
                   disabled={
                     !fileUploaded ||
-                    askMutation.isPending ||
+                    isStreaming ||
                     questionStats.remaining <= 0 ||
                     sessionSecondsRemaining <= 0
                   }

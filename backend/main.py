@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 from qdrant_client.models import PointStruct, Distance, VectorParams, Filter, FieldCondition, MatchValue, Range, PayloadSchemaType
@@ -43,7 +43,7 @@ print(FRONT_END_URL)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONT_END_URL],
+    allow_origins=["http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -72,9 +72,9 @@ if APP_ENV == "production":
 else:
     qdrant = QdrantClient(
         url=os.getenv("QDRANT_LOCAL_URL", "http://localhost:6333"),
-        api_key=None,
+        api_key=os.getenv("QDRANT_API_KEY"),
         timeout=120,
-        prefer_grpc=False,
+        prefer_grpc=True,
     )
 
 if hf_token:
@@ -182,6 +182,143 @@ def openapi(user: str = Depends(verify_docs)):
         version=app.version,
         routes=app.routes,
     )
+
+@app.websocket("/ws/ask")
+async def websocket_ask(websocket: WebSocket):
+    await websocket.accept()
+
+    try:
+        data = await websocket.receive_json()
+
+        question = data.get("question")
+        session_id = data.get("sessionId")
+        document_id = data.get("documentId")
+
+        logger.info(
+        "Question received: question=%s session=%s document=%s",
+        question,
+        session_id,
+        document_id,
+    )
+
+        if not question or not session_id or not document_id:
+            logger.warning(
+            "Missing required fields: question=%s sessionId=%s documentId=%s",
+            question,
+            session_id,
+            document_id,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="question, sessionId, documentId are required"
+            )
+        
+
+        session=session_usage.get(session_id)
+
+        if not session:
+            logger.warning("Invalid or expired session: %s", session_id)
+            raise HTTPException(
+                status_code=403,
+                detail="Session expired or invalid. Please upload the PDF again."
+            )
+        
+
+        if int(time.time()) > session["expiresAt"]:
+            logger.warning(
+            "Session expired: %s",
+            session_id,
+            )
+            raise HTTPException(
+                status_code=403,
+                detail="Session expired. Please upload the PDF again.",
+            )
+
+
+        if session["documentId"] != document_id:
+            logger.warning("Invalid document for this session: %s",document_id)
+            raise HTTPException(
+                status_code=403,
+                detail="Invalid document for this session.",
+            )
+
+
+        if session["questionsUsed"] >= MAX_QUESTION_PER_SESSION:
+            raise HTTPException(
+                status_code=429,
+                detail="Question limit reached for this PDF.",
+            )
+
+        questionVector = get_model().encode(question).tolist()
+
+        searchResponse = qdrant.query_points(
+            collection_name=COLLECTION_NAME,
+            query=questionVector,
+            query_filter=Filter(
+                must=[
+                    FieldCondition(
+                        key="sessionId",
+                        match=MatchValue(value=session_id),
+                    ),
+                    FieldCondition(
+                        key="documentId",
+                        match=MatchValue(value=document_id),
+                    ),
+                ]
+            ),
+            limit=3,
+            timeout=120,
+        )
+
+        results = searchResponse.points
+        context = "\n\n".join([r.payload["text"] for r in results])
+
+        prompt = f"""
+        Answer the question using only the context below.
+
+        Context:
+        {context}
+
+        Question:
+        {question}
+        """
+
+        stream = groq.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}],
+            stream=True,
+        )
+
+        full_answer = ""
+
+        for chunk in stream:
+            token = chunk.choices[0].delta.content or ""
+            if token:
+                full_answer += token
+                await websocket.send_json({
+                    "type": "token",
+                    "content": token
+                })
+
+        session_usage[session_id]["questionsUsed"] += 1
+
+        await websocket.send_json({
+            "type": "done",
+            "answer": full_answer,
+            "questionsUsed": session_usage[session_id]["questionsUsed"],
+            "questionsRemaining": MAX_QUESTION_PER_SESSION - session_usage[session_id]["questionsUsed"],
+        })
+
+    except WebSocketDisconnect:
+        logger.warning("WebSocket disconnected")
+
+    except Exception as e:
+        logger.exception("WebSocket ask failed")
+        await websocket.send_json({
+            "type": "error",
+            "message": str(e)
+        })
+        await websocket.close()
 
 @app.post("/ask")
 @limiter.limit("10/minute")
