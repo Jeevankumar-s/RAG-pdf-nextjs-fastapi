@@ -35,7 +35,7 @@ jobs:
                 NEXT_PUBLIC_APP_ENV: test
 
             - run: npx playwright install --with-deps chromium
-            - run: npm run test:ec2
+            - run: npm run test:e2e
               env:
                 NEXT_PUBLIC_API_URL: http://localhost:8000
                 NEXT_PUBLIC_APP_ENV: test
