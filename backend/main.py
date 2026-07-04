@@ -35,9 +35,15 @@ app=FastAPI(
     openapi_url=None
 )
 
+groq=Groq(api_key=os.getenv("GROQ_API_KEY"))
+hf_token=os.getenv("HF_TOKEN")
+APP_ENV = os.getenv("APP_ENV", "local")
+FRONT_END_URL=os.getenv("FRONT_END_URL", "http://localhost:3000")
+print(FRONT_END_URL)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[FRONT_END_URL],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -55,10 +61,6 @@ def get_model():
     if model is None:
         model = SentenceTransformer("all-MiniLM-L6-v2")
     return model
-
-groq=Groq(api_key=os.getenv("GROQ_API_KEY"))
-hf_token=os.getenv("HF_TOKEN")
-APP_ENV = os.getenv("APP_ENV", "local")
 
 if APP_ENV == "production":
     qdrant = QdrantClient(
