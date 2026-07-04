@@ -1,4 +1,4 @@
-name: Backend CI
+name: Frontend CI
 
 on:
     push:
@@ -30,7 +30,12 @@ jobs:
             - run: npm ci
             - run: npm run lint
             - run: npm run build
+              env:
+                NEXT_PUBLIC_API_URL: http://localhost:8000
+                NEXT_PUBLIC_APP_ENV: test
 
+            - run: npx playwright install --with-deps chromium
+            - run: npm run test:ec2
               env:
                 NEXT_PUBLIC_API_URL: http://localhost:8000
                 NEXT_PUBLIC_APP_ENV: test

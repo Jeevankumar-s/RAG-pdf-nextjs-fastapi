@@ -267,6 +267,7 @@ const RAGPDF = () => {
                   PDF only, max size {MAX_FILE_SIZE_LABEL}
                 </span>
                 <input
+                  data-testid="pdf-input"
                   ref={fileInputRef}
                   type="file"
                   accept="application/pdf"
@@ -277,6 +278,7 @@ const RAGPDF = () => {
 
               <div className="mt-4 grid grid-cols-2 gap-2">
                 <button
+                  data-testid="upload-button"
                   onClick={handleSubmit}
                   disabled={!file || loadingUpload}
                   className="flex items-center justify-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-medium text-[#202123] transition hover:bg-[#ececf1] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
@@ -289,6 +291,7 @@ const RAGPDF = () => {
                   {loadingUpload ? "Uploading" : "Upload"}
                 </button>
                 <button
+                  data-testid="delete-button"
                   onClick={handleFileDelete}
                   disabled={!file && !fileUploaded}
                   className="flex items-center justify-center gap-2 rounded-md border border-[#565869] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#343541] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
@@ -455,6 +458,7 @@ const RAGPDF = () => {
             <div className="mx-auto max-w-3xl">
               <div className="flex items-end gap-3 rounded-xl border border-[#d1d5db] bg-white p-3 shadow-sm focus-within:border-[#10a37f]">
                 <textarea
+                  data-testid="question-input"
                   value={question}
                   onChange={(e) => setQuestion(e.target.value)}
                   onKeyDown={handleQuestionKeyDown}
@@ -473,6 +477,7 @@ const RAGPDF = () => {
                   className="max-h-36 min-h-10 flex-1 resize-none bg-transparent py-2 text-sm leading-6 outline-none disabled:cursor-not-allowed disabled:text-[#9ca3af]"
                 />
                 <button
+                  data-testid="ask-button"
                   onClick={handleAskQuestion}
                   disabled={!canAsk}
                   className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-[#10a37f] text-lg font-semibold text-white transition hover:bg-[#0e906f] disabled:cursor-not-allowed disabled:bg-[#d1d5db] cursor-pointer"
