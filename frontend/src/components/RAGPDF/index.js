@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import axios from "axios";
+import { useUploadPdf } from "@/hooks/useUploadPdf";
+import { useAskQuestion } from "@/hooks/useAskQuestion";
 import {
   Bot,
   Clock,
@@ -15,7 +16,6 @@ import {
   Upload,
 } from "lucide-react";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL;
 const MAX_FILE_SIZE_LABEL = "10 MB";
 
 const formatTime = (seconds) => {
@@ -42,25 +42,26 @@ const RAGPDF = () => {
   const [question, setQuestion] = useState("");
   const [messages, setMessages] = useState([]);
   const [sessionSecondsRemaining, setSessionSecondsRemaining] = useState(null);
-  const [loadingUpload, setLoadingUpload] = useState(false);
-  const [loadingAnswer, setLoadingAnswer] = useState(false);
   const [error, setError] = useState("");
+
+  const uploadMutation = useUploadPdf();
+  const askMutation = useAskQuestion();
 
   const fileUploaded = Boolean(sessionId && documentId);
   const canAsk =
     fileUploaded &&
     question.trim().length > 0 &&
-    !loadingAnswer &&
+    !askMutation.isPending &&
     sessionSecondsRemaining > 0 &&
     questionStats.remaining > 0;
 
   const statusLabel = useMemo(() => {
-    if (loadingUpload) return "Indexing PDF";
+    if (uploadMutation.isPending) return "Indexing PDF";
     if (fileUploaded && sessionSecondsRemaining === 0) return "Expired";
     if (fileUploaded) return "Ready";
     if (file) return "Selected";
     return "No document";
-  }, [file, fileUploaded, loadingUpload, sessionSecondsRemaining]);
+  }, [file, fileUploaded, uploadMutation.isPending, sessionSecondsRemaining]);
 
   useEffect(() => {
     if (!fileUploaded || sessionSecondsRemaining === null) return undefined;
@@ -111,116 +112,119 @@ const RAGPDF = () => {
     }
   };
 
-  const handleAskQuestion = async () => {
-    const trimmedQuestion = question.trim();
+const handleAskQuestion = () => {
+  const trimmedQuestion = question.trim();
 
-    if (!trimmedQuestion) {
-      setError("Please enter a question.");
-      return;
-    }
+  if (!trimmedQuestion) {
+    setError("Please enter a question.");
+    return;
+  }
 
-    if (!fileUploaded) {
-      setError("Please upload a PDF first.");
-      return;
-    }
+  if (!fileUploaded) {
+    setError("Please upload a PDF first.");
+    return;
+  }
 
-    if (questionStats.remaining <= 0) {
-      setError("Question limit reached for this PDF.");
-      return;
-    }
+  if (questionStats.remaining <= 0) {
+    setError("Question limit reached for this PDF.");
+    return;
+  }
 
-    if (sessionSecondsRemaining <= 0) {
-      setError("Session expired. Please upload the PDF again.");
-      return;
-    }
+  if (sessionSecondsRemaining <= 0) {
+    setError("Session expired. Please upload the PDF again.");
+    return;
+  }
 
-    const userMessage = {
-      id: crypto.randomUUID(),
-      role: "user",
-      content: trimmedQuestion,
-    };
+  const userMessage = {
+    id: crypto.randomUUID(),
+    role: "user",
+    content: trimmedQuestion,
+  };
 
-    setMessages((currentMessages) => [...currentMessages, userMessage]);
-    setQuestion("");
-    setLoadingAnswer(true);
-    setError("");
+  setMessages((currentMessages) => [...currentMessages, userMessage]);
+  setQuestion("");
+  setError("");
 
-    try {
-      const payload = { question: trimmedQuestion, sessionId, documentId };
-      const response = await axios.post(`${API_URL}/ask`, payload);
+  const payload = {
+    question: trimmedQuestion,
+    sessionId,
+    documentId,
+  };
 
-      if (response.status === 200) {
-        const { answer, questionsUsed, questionsRemaining, sources = [] } =
-          response.data;
+  askMutation.mutate(payload, {
+    onSuccess: ({ data }) => {
+      const { answer, questionsUsed, questionsRemaining, sources = [] } = data;
 
-        setMessages((currentMessages) => [
-          ...currentMessages,
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: answer,
-            sources,
-          },
-        ]);
-        setQuestionStats((currentStats) => ({
-          used: questionsUsed ?? currentStats.used,
-          remaining: questionsRemaining ?? currentStats.remaining,
-          max: currentStats.max || (questionsUsed ?? 0) + (questionsRemaining ?? 0),
-        }));
-      }
-    } catch (e) {
+      setMessages((currentMessages) => [
+        ...currentMessages,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: answer,
+          sources,
+        },
+      ]);
+
+      setQuestionStats((currentStats) => ({
+        used: questionsUsed ?? currentStats.used,
+        remaining: questionsRemaining ?? currentStats.remaining,
+        max:
+          currentStats.max ||
+          (questionsUsed ?? 0) + (questionsRemaining ?? 0),
+      }));
+    },
+
+    onError: (error) => {
       setMessages((currentMessages) =>
         currentMessages.filter((message) => message.id !== userMessage.id),
       );
-      setError(e.response?.data?.detail || "Failed to get answer.");
-    } finally {
-      setLoadingAnswer(false);
-    }
-  };
 
-  const handleSubmit = async () => {
-    if (!file) {
-      setError("Please choose a PDF file.");
-      return;
-    }
+      setError(error.response?.data?.detail || "Failed to get answer.");
+    },
+  });
+};
 
-    setLoadingUpload(true);
-    setError("");
+const handleSubmit = () => {
+  if (!file) {
+    setError("Please choose a PDF file.");
+    return;
+  }
 
-    const formData = new FormData();
-    formData.append("file", file);
+  setError("");
 
-    try {
-      const response = await axios.post(`${API_URL}/upload-pdf`, formData);
+  const formData = new FormData();
+  formData.append("file", file);
 
-      if (response.status === 200) {
-        const data = response.data;
+  uploadMutation.mutate(formData, {
+    onSuccess: ({ data }) => {
+      setDocumentId(data.documentId);
+      setSessionId(data.sessionId);
+      setUploadMeta(data);
 
-        setDocumentId(data.documentId);
-        setSessionId(data.sessionId);
-        setUploadMeta(data);
-        setQuestionStats({
-          used: 0,
-          remaining: data.maxQuestions ?? 0,
-          max: data.maxQuestions ?? 0,
-        });
-        setSessionSecondsRemaining(data.expiresInSeconds ?? null);
-        setMessages([
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content:
-              "PDF uploaded successfully. Ask a question and I will answer using only this document.",
-            sources: [data.fileName].filter(Boolean),
-          },
-        ]);
-      }
-    } catch (e) {
-      setError(e.response?.data?.detail || "Failed to upload PDF.");
-    } finally {
-      setLoadingUpload(false);
-    }
-  };
+      setQuestionStats({
+        used: 0,
+        remaining: data.maxQuestions ?? 0,
+        max: data.maxQuestions ?? 0,
+      });
+
+      setSessionSecondsRemaining(data.expiresInSeconds ?? null);
+
+      setMessages([
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content:
+            "PDF uploaded successfully. Ask a question and I will answer using only this document.",
+          sources: [data.fileName].filter(Boolean),
+        },
+      ]);
+    },
+
+    onError: (error) => {
+      setError(error.response?.data?.detail || "Failed to upload PDF.");
+    },
+  });
+};
 
   const handleQuestionKeyDown = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -280,15 +284,18 @@ const RAGPDF = () => {
                 <button
                   data-testid="upload-button"
                   onClick={handleSubmit}
-                  disabled={!file || loadingUpload}
+                  disabled={!file || uploadMutation.isPending}
                   className="flex items-center justify-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-medium text-[#202123] transition hover:bg-[#ececf1] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
                 >
-                  {loadingUpload ? (
-                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  {uploadMutation.isPending ? (
+                    <Loader2
+                      className="h-4 w-4 animate-spin"
+                      aria-hidden="true"
+                    />
                   ) : (
                     <Upload className="h-4 w-4" aria-hidden="true" />
                   )}
-                  {loadingUpload ? "Uploading" : "Upload"}
+                  {uploadMutation.isPending ? "Uploading" : "Upload"}
                 </button>
                 <button
                   data-testid="delete-button"
@@ -338,7 +345,9 @@ const RAGPDF = () => {
                   <FileText className="h-3.5 w-3.5" aria-hidden="true" />
                   Max file size
                 </p>
-                <p className="mt-1 text-2xl font-semibold">{MAX_FILE_SIZE_LABEL}</p>
+                <p className="mt-1 text-2xl font-semibold">
+                  {MAX_FILE_SIZE_LABEL}
+                </p>
               </div>
             </div>
 
@@ -397,8 +406,9 @@ const RAGPDF = () => {
                     Upload a PDF to begin
                   </div>
                   <p className="mt-4 max-w-md text-sm leading-6 text-[#6b7280]">
-                    You can ask up to {uploadMeta?.maxQuestions || 5} questions per
-                    upload. PDF upload size is limited to {MAX_FILE_SIZE_LABEL}.
+                    You can ask up to {uploadMeta?.maxQuestions || 5} questions
+                    per upload. PDF upload size is limited to{" "}
+                    {MAX_FILE_SIZE_LABEL}.
                   </p>
                 </div>
               ) : (
@@ -407,7 +417,9 @@ const RAGPDF = () => {
                     <article
                       key={message.id}
                       className={`flex gap-4 ${
-                        message.role === "user" ? "justify-end" : "justify-start"
+                        message.role === "user"
+                          ? "justify-end"
+                          : "justify-start"
                       }`}
                     >
                       {message.role === "assistant" && (
@@ -432,13 +444,16 @@ const RAGPDF = () => {
                     </article>
                   ))}
 
-                  {loadingAnswer && (
+                  {askMutation.isPending && (
                     <article className="flex gap-4">
                       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-[#10a37f] text-sm font-semibold text-white">
                         <Bot className="h-4 w-4" aria-hidden="true" />
                       </div>
                       <div className="flex items-center gap-2 rounded-lg border border-[#e5e7eb] bg-white px-4 py-3 text-sm text-[#6b7280] shadow-sm">
-                        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                        <Loader2
+                          className="h-4 w-4 animate-spin"
+                          aria-hidden="true"
+                        />
                         Thinking...
                       </div>
                     </article>
@@ -469,7 +484,7 @@ const RAGPDF = () => {
                   }
                   disabled={
                     !fileUploaded ||
-                    loadingAnswer ||
+                    askMutation.isPending ||
                     questionStats.remaining <= 0 ||
                     sessionSecondsRemaining <= 0
                   }
@@ -488,8 +503,8 @@ const RAGPDF = () => {
               </div>
               <p className="mt-2 text-center text-xs text-[#6b7280]">
                 {questionStats.remaining} questions left from{" "}
-                {questionStats.max || uploadMeta?.maxQuestions || 0}. Max PDF size{" "}
-                {MAX_FILE_SIZE_LABEL}.
+                {questionStats.max || uploadMeta?.maxQuestions || 0}. Max PDF
+                size {MAX_FILE_SIZE_LABEL}.
               </p>
             </div>
           </div>
