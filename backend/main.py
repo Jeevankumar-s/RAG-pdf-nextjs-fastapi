@@ -19,8 +19,19 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi import _rate_limit_exceeded_handler
 import logging
+import json
+from redis_client import redis_client
+
+
+
 
 load_dotenv()
+
+try:
+    redis_client.ping()
+    print("Redis connected successfully")
+except Exception:
+    print("Unable to connect to Redis")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,7 +50,6 @@ groq=Groq(api_key=os.getenv("GROQ_API_KEY"))
 hf_token=os.getenv("HF_TOKEN")
 APP_ENV = os.getenv("APP_ENV", "local")
 FRONT_END_URL=os.getenv("FRONT_END_URL", "http://localhost:3000")
-print(FRONT_END_URL)
 
 app.add_middleware(
     CORSMiddleware,
@@ -85,32 +95,6 @@ COLLECTION_NAME="documents"
 SESSION_EXPIRY_SECONDS=600
 MAX_QUESTION_PER_SESSION=5
 MAX_FILE_SIZE = 10 * 1024 * 1024  
-
-session_usage={}
-
-def cleanupExpiredSessions():
-    current_time = int(time.time())
-
-    qdrant.delete(
-        collection_name=COLLECTION_NAME,
-        points_selector=Filter(
-            must=[
-                FieldCondition(
-                    key="expiresAt",
-                    range=Range(lt=current_time),
-                )
-            ]
-        ),
-    )
-
-    expired_sessions = []
-
-    for session_id, session in session_usage.items():
-        if current_time > session["expiresAt"]:
-            expired_sessions.append(session_id)
-
-    for session_id in expired_sessions:
-        del session_usage[session_id]
 
 def createCollectionIfNotExits():
     collections = qdrant.get_collections().collections
@@ -183,6 +167,32 @@ def openapi(user: str = Depends(verify_docs)):
         routes=app.routes,
     )
 
+def session_key(session_id: str):
+    return f"session:{session_id}"
+
+def get_session(session_id: str):
+    data = redis_client.get(session_key(session_id))
+    
+    if not data:
+        return None
+    
+    return json.loads(data)
+
+def save_session(session_id: str, session: dict):
+    ttl= max(session["expiresAt"]-int(time.time()), 1)
+    redis_client.setex(session_key(session_id), ttl, json.dumps(session))
+
+def increment_questions_used(session_id: str):
+    session=get_session(session_id)
+
+    if not session:
+        return None
+    
+    session["questionsUsed"]+=1
+    save_session(session_id, session)
+    
+    return session
+
 @app.websocket("/ws/ask")
 async def websocket_ask(websocket: WebSocket):
     await websocket.accept()
@@ -208,20 +218,24 @@ async def websocket_ask(websocket: WebSocket):
             session_id,
             document_id,
             )
-            raise HTTPException(
-                status_code=400,
-                detail="question, sessionId, documentId are required"
-            )
+            await websocket.send_json({
+                "type": "error",
+                "message": "question, sessionId, documentId are required"
+            })
+            await websocket.close(code=1008)
+            return
         
 
-        session=session_usage.get(session_id)
+        session = get_session(session_id)
 
         if not session:
             logger.warning("Invalid or expired session: %s", session_id)
-            raise HTTPException(
-                status_code=403,
-                detail="Session expired or invalid. Please upload the PDF again."
-            )
+            await websocket.send_json({
+            "type": "error",
+            "message": "Session expired or invalid. Please upload the PDF again."
+            })
+            await websocket.close(code=1008)
+            return
         
 
         if int(time.time()) > session["expiresAt"]:
@@ -229,25 +243,30 @@ async def websocket_ask(websocket: WebSocket):
             "Session expired: %s",
             session_id,
             )
-            raise HTTPException(
-                status_code=403,
-                detail="Session expired. Please upload the PDF again.",
-            )
+            await websocket.send_json({
+                "type": "error",
+                "message": "Session expired. Please upload the PDF again."
+            })
+            await websocket.close(code=1008)
+            return
 
 
         if session["documentId"] != document_id:
             logger.warning("Invalid document for this session: %s",document_id)
-            raise HTTPException(
-                status_code=403,
-                detail="Invalid document for this session.",
-            )
-
+            await websocket.send_json({
+                "type": "error",
+                "message": "Invalid document for this session."
+            })
+            await websocket.close(code=1008)
+            return
 
         if session["questionsUsed"] >= MAX_QUESTION_PER_SESSION:
-            raise HTTPException(
-                status_code=429,
-                detail="Question limit reached for this PDF.",
-            )
+            await websocket.send_json({
+                "type": "error",
+                "message": "Question limit reached for this PDF."
+            })
+            await websocket.close(code=1008)
+            return
 
         questionVector = get_model().encode(question).tolist()
 
@@ -269,8 +288,17 @@ async def websocket_ask(websocket: WebSocket):
             limit=3,
             timeout=120,
         )
-
+        
         results = searchResponse.points
+        
+        if not results:
+            await websocket.send_json({
+                "type": "error",
+                "message": "No relevant content found."
+            })
+            await websocket.close(code=1008)
+            return
+
         context = "\n\n".join([r.payload["text"] for r in results])
 
         prompt = f"""
@@ -300,13 +328,13 @@ async def websocket_ask(websocket: WebSocket):
                     "content": token
                 })
 
-        session_usage[session_id]["questionsUsed"] += 1
+        session = increment_questions_used(session_id)
 
         await websocket.send_json({
             "type": "done",
             "answer": full_answer,
-            "questionsUsed": session_usage[session_id]["questionsUsed"],
-            "questionsRemaining": MAX_QUESTION_PER_SESSION - session_usage[session_id]["questionsUsed"],
+            "questionsUsed": session["questionsUsed"],
+            "questionsRemaining": MAX_QUESTION_PER_SESSION - session["questionsUsed"],
         })
 
     except WebSocketDisconnect:
@@ -316,129 +344,9 @@ async def websocket_ask(websocket: WebSocket):
         logger.exception("WebSocket ask failed")
         await websocket.send_json({
             "type": "error",
-            "message": str(e)
+            "message": "Internal server error."
         })
-        await websocket.close()
-
-@app.post("/ask")
-@limiter.limit("10/minute")
-def askQuestion(request: Request, data: dict):
-    question = data.get("question")
-    session_id=data.get("sessionId")
-    document_id=data.get("documentId")
-
-    logger.info(
-    "Question received: question=%s session=%s document=%s",
-    question,
-    session_id,
-    document_id,
-)
-
-    if not question or not session_id or not document_id:
-        logger.warning(
-        "Missing required fields: question=%s sessionId=%s documentId=%s",
-        question,
-        session_id,
-        document_id,
-        )
-        raise HTTPException(
-            status_code=400,
-            detail="question, sessionId, documentId are required"
-        )
-    
-
-    session=session_usage.get(session_id)
-
-    if not session:
-        logger.warning("Invalid or expired session: %s", session_id)
-        raise HTTPException(
-            status_code=403,
-            detail="Session expired or invalid. Please upload the PDF again."
-        )
-    
-
-    if int(time.time()) > session["expiresAt"]:
-        logger.warning(
-        "Session expired: %s",
-        session_id,
-        )
-        raise HTTPException(
-            status_code=403,
-            detail="Session expired. Please upload the PDF again.",
-        )
-
-
-    if session["documentId"] != document_id:
-        logger.warning("Invalid document for this session: %s",document_id)
-        raise HTTPException(
-            status_code=403,
-            detail="Invalid document for this session.",
-        )
-
-
-    if session["questionsUsed"] >= MAX_QUESTION_PER_SESSION:
-        raise HTTPException(
-            status_code=429,
-            detail="Question limit reached for this PDF.",
-        )
-
-    questionVector=get_model().encode(question).tolist()
-
-    searchResponse = qdrant.query_points(
-        collection_name=COLLECTION_NAME,
-        query=questionVector,
-        query_filter=Filter(
-            must=[
-                FieldCondition(
-                    key="sessionId",
-                    match=MatchValue(value=session_id),
-                ),
-                FieldCondition(
-                    key="documentId",
-                    match=MatchValue(value=document_id),
-                ),
-            ]
-        ),
-        limit=3,
-        timeout=120,
-    )
-    results=searchResponse.points
-
-    if not results:
-        raise HTTPException(
-            status_code=404,
-            detail="No relevant content found."
-        )
-
-    context="\n\n".join([r.payload["text"] for r in results])
-    
-    prompt = f"""
-    Answer the question using only the context below.
-
-    Context:
-    {context}
-
-    Question:
-    {question}
-    """
-
-    response=groq.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        messages=[
-            {"role": "user", "content":prompt}
-        ],
-    )    
-
-    logger.info("Answer generated successfully: session=%s", session_id)
-
-    session_usage[session_id]["questionsUsed"] += 1
-
-    return {
-        "answer" : response.choices[0].message.content,
-        "questionsUsed": session_usage[session_id]["questionsUsed"],
-        "questionsRemaining": MAX_QUESTION_PER_SESSION - session_usage[session_id]["questionsUsed"],
-        "sources": list(set([r.payload["fileName"] for r in results])),
-    }
+        await websocket.close(code=1011)
 
 @app.post("/upload-pdf")
 @limiter.limit("5/minute")
@@ -525,11 +433,11 @@ def uploadPdf(request: Request, file: UploadFile=File(...)):
 
     logger.info("PDF vectors uploaded to Qdrant: session=%s document=%s", session_id, document_id)
 
-    session_usage[session_id] = {
+    save_session(session_id, {
     "documentId": document_id,
     "questionsUsed": 0,
     "expiresAt": expires_at,
-    }
+    })
 
     return {
         "message": "PDF uploaded successfully",

@@ -17,28 +17,25 @@ def test_docs_require_auth():
     response = client.get("/docs")
     assert response.status_code==401
 
-def test_ask_missing_field():
-    response = client.post("/ask", json={})
-    assert response.status_code==400
-    assert response.json()["detail"]=="question, sessionId, documentId are required"
+def test_ws_ask_missing_field():
+    with client.websocket_connect("/ws/ask") as websocket:
+        websocket.send_json({})
 
-def test_ask_incorrect_fields():
-    response = client.post('/ask', json={
-        "question":"who is Jeevan",
-        "sessionId":"wrong-id-1234",
-        "documentId":"wrong-id-1234"
-    })
-    assert response.status_code==403
-    assert response.json()["detail"]=="Session expired or invalid. Please upload the PDF again."
+        response = websocket.receive_json()
+        assert response["type"] == "error"
+        assert "question, sessionId, documentId are required" in response["message"]
 
-def test_ask_rate_limit():
-    payload={
-        "question":"who is jeevan",
-        "sessionId":"test-123",
-        "documentId":"test-321"
-    }
-    for _ in range(10):
-        response = client.post("/ask", json=payload)
+def test_ws_ask_invalid_session():
+    with client.websocket_connect("/ws/ask") as websocket:
+        websocket.send_json(
+            {
+                "question": "Who is Jeevan?",
+                "sessionId": "wrong-id-1234",
+                "documentId": "wrong-id-1234",
+            }
+        )
 
-    response = client.post('/ask', json=payload)
-    assert response.json()["error"] == "Rate limit exceeded: 10 per 1 minute"
+        response = websocket.receive_json()
+
+        assert response["type"] == "error"
+        assert "Session expired or invalid" in response["message"]
