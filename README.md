@@ -1,17 +1,17 @@
 # Next.js RAG PDF Full Stack
 
-Full-stack PDF question-answering app with a Next.js frontend and a FastAPI backend. Users upload a PDF, the backend extracts and embeds its text into Qdrant, and questions are answered with Groq using only the retrieved document context.
+Full-stack PDF question-answering app with a Next.js frontend and a FastAPI backend. Users upload a PDF, the backend extracts and embeds its text into Qdrant, and the frontend streams answers from Groq over a WebSocket using only retrieved document context.
 
 ## Features
 
 - Chat-style PDF assistant built with Next.js, React, Tailwind CSS, React Query, Axios, and Lucide icons
-- PDF upload UI with selected-file state, clear action, upload progress, session countdown, and question counters
+- PDF upload, clear action, upload/indexing state, local session restore, session countdown, and question counters
 - Backend PDF validation for extension, MIME type, readable text, and 10 MB file size
 - PDF text extraction with `pypdf`
 - Text chunking and embeddings with Sentence Transformers `all-MiniLM-L6-v2`
 - Vector storage and filtered similarity search in Qdrant
-- Groq-powered answers with document-scoped retrieval
-- Temporary upload sessions with generated `sessionId` and `documentId`
+- Redis-backed temporary upload sessions
+- Streaming Groq answers over `WebSocket /ws/ask`
 - 10-minute session expiry and 5-question limit per uploaded PDF
 - Rate limiting with SlowAPI
 - CORS restricted to the configured frontend URL
@@ -22,7 +22,7 @@ Full-stack PDF question-answering app with a Next.js frontend and a FastAPI back
 ## Tech Stack
 
 - Frontend: Next.js 16, React 19, TypeScript, Tailwind CSS 4, React Query, Axios, Playwright
-- Backend: Python 3.11, FastAPI, Uvicorn, Qdrant client, Sentence Transformers, Groq SDK, PyPDF, SlowAPI, Pytest
+- Backend: Python 3.11, FastAPI, Uvicorn, Qdrant client, Sentence Transformers, Groq SDK, PyPDF, Redis, SlowAPI, Pytest
 - Infrastructure: Docker and Kubernetes manifests for the backend
 
 ## Project Structure
@@ -31,23 +31,24 @@ Full-stack PDF question-answering app with a Next.js frontend and a FastAPI back
 .
 |-- backend/
 |   |-- auth.py                    # HTTP Basic Auth for API docs
-|   |-- main.py                    # FastAPI app, upload, RAG, sessions, rate limits
+|   |-- main.py                    # FastAPI app, upload, WebSocket RAG, sessions, rate limits
+|   |-- redis_client.py            # Redis connection for session storage
 |   |-- requirements.txt           # Backend Python dependencies
 |   |-- Dockerfile                 # Backend container image
 |   |-- tests/
-|   |   `-- test_main.py           # Backend API tests
+|   |   `-- test_main.py           # Backend API and WebSocket tests
 |   `-- k8s/
 |       |-- deployment.yaml        # Kubernetes deployment
 |       |-- service.yaml           # NodePort service on 30080
 |       `-- secret.example.yaml    # Example backend environment secret
 |-- frontend/
-|   |-- app/                       # Next.js app router pages and layout
+|   |-- app/                       # Next.js app router page and layout
 |   |-- hooks/                     # React Query mutation hooks
 |   |-- lib/                       # Axios and QueryClient setup
 |   |-- providers/                 # React Query provider
 |   |-- services/                  # RAG API client functions
 |   |-- src/components/RAGPDF/     # Main PDF chat UI
-|   |-- tests/                     # Playwright E2E tests
+|   |-- tests/                     # Playwright E2E tests and fixture PDF
 |   `-- package.json
 `-- README.md
 ```
@@ -56,6 +57,7 @@ Full-stack PDF question-answering app with a Next.js frontend and a FastAPI back
 
 - Node.js compatible with Next.js 16
 - Python 3.10+
+- Redis running locally or reachable through `REDIS_URL`
 - Qdrant running locally or a Qdrant Cloud cluster
 - Groq API key
 - Optional Hugging Face token for restricted model download environments
@@ -71,9 +73,9 @@ GROQ_API_KEY=your_groq_api_key
 DOCS_USERNAME=admin
 DOCS_PASSWORD=change-me
 
-# Local mode is the default.
 APP_ENV=local
 QDRANT_LOCAL_URL=http://localhost:6333
+REDIS_URL=redis://localhost:6379
 FRONT_END_URL=http://localhost:3000
 
 # Optional
@@ -86,6 +88,7 @@ For production-style cloud Qdrant configuration:
 APP_ENV=production
 QDRANT_CLOUD_URL=your_qdrant_cloud_url
 QDRANT_API_KEY=your_qdrant_api_key
+REDIS_URL=redis://your_redis_host:6379
 GROQ_API_KEY=your_groq_api_key
 DOCS_USERNAME=admin
 DOCS_PASSWORD=change-me
@@ -106,19 +109,27 @@ Create `frontend/.env.local`:
 
 ```env
 NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
+NEXT_PUBLIC_SITE_URL=http://localhost:3000
 ```
+
+The frontend derives the WebSocket URL from `NEXT_PUBLIC_API_URL`, replacing `http` with `ws` and `https` with `wss`.
+`NEXT_PUBLIC_SITE_URL` is optional locally, but should be set to the deployed frontend URL so canonical links, Open Graph metadata, `robots.txt`, and `sitemap.xml` point to the public site.
 
 ## Local Development
 
-### 1. Start Qdrant
+### 1. Start Redis
 
-Run Qdrant locally, for example with Docker:
+```bash
+docker run -p 6379:6379 redis:7
+```
+
+### 2. Start Qdrant
 
 ```bash
 docker run -p 6333:6333 qdrant/qdrant
 ```
 
-### 2. Start the Backend
+### 3. Start the Backend
 
 PowerShell:
 
@@ -142,7 +153,7 @@ uvicorn main:app --reload
 
 The API runs at `http://127.0.0.1:8000`.
 
-### 3. Start the Frontend
+### 4. Start the Frontend
 
 ```bash
 cd frontend
@@ -157,9 +168,10 @@ The app runs at `http://localhost:3000`.
 1. Open the frontend.
 2. Choose a PDF file and upload it.
 3. The backend validates the file, extracts text, chunks it, embeds each chunk, and stores vectors in Qdrant with session metadata.
-4. The frontend receives `sessionId`, `documentId`, expiry, page count, chunk count, and question limits.
-5. Ask questions in the chat input.
-6. The backend embeds the question, retrieves matching chunks for the same session and document, sends the context to Groq, and returns the answer plus source file names.
+4. The backend stores the temporary session in Redis and returns `sessionId`, `documentId`, expiry, page count, chunk count, and question limits.
+5. Ask a question in the chat input.
+6. The frontend opens `WebSocket /ws/ask` and sends the question with the session and document IDs.
+7. The backend embeds the question, retrieves matching chunks for the same session and document, streams Groq tokens to the frontend, and updates the Redis-backed question counter.
 
 ## API Endpoints
 
@@ -209,11 +221,11 @@ Response:
 }
 ```
 
-### `POST /ask`
+### `WebSocket /ws/ask`
 
-Asks a question against the uploaded PDF for the provided session.
+Streams an answer for a question against the uploaded PDF for the provided session.
 
-Request:
+Client message:
 
 ```json
 {
@@ -223,14 +235,32 @@ Request:
 }
 ```
 
-Response:
+Token message:
 
 ```json
 {
-  "answer": "Answer generated from the retrieved PDF context.",
+  "type": "token",
+  "content": "partial answer text"
+}
+```
+
+Completion message:
+
+```json
+{
+  "type": "done",
+  "answer": "Full streamed answer.",
   "questionsUsed": 1,
-  "questionsRemaining": 4,
-  "sources": ["example.pdf"]
+  "questionsRemaining": 4
+}
+```
+
+Error message:
+
+```json
+{
+  "type": "error",
+  "message": "Session expired or invalid. Please upload the PDF again."
 }
 ```
 
@@ -251,7 +281,6 @@ Serves the OpenAPI schema protected by HTTP Basic Auth.
 - Uploaded PDFs expire after 10 minutes.
 - Each upload allows up to 5 questions.
 - `POST /upload-pdf`: 5 requests per minute per client.
-- `POST /ask`: 10 requests per minute per client.
 - `GET /docs`: 10 requests per minute per client.
 - `GET /test-qdrant`: 10 requests per minute per client.
 
@@ -275,6 +304,18 @@ npm run test:e2e
 ```
 
 The Playwright config starts the built frontend with `npm run start` at `http://localhost:3000`.
+
+Useful frontend scripts:
+
+```bash
+npm run dev
+npm run build
+npm run start
+npm run lint
+npm run test:e2e
+npm run test:e2e:ui
+npm run test:e2e:headed
+```
 
 ## Docker
 
@@ -300,4 +341,4 @@ kubectl apply -f k8s/deployment.yaml
 kubectl apply -f k8s/service.yaml
 ```
 
-The service is configured as a NodePort service on port `30080`.
+The service is configured as a NodePort service on port `30080`. The deployment reads backend environment variables from the `rag-backend-secrets` secret.
