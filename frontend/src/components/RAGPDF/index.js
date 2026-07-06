@@ -2,7 +2,6 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useUploadPdf } from "@/hooks/useUploadPdf";
-import { useAskQuestion } from "@/hooks/useAskQuestion";
 import {
   Bot,
   Clock,
@@ -28,25 +27,81 @@ const formatTime = (seconds) => {
   return `${minutes}m ${remainingSeconds}s`;
 };
 
+const getSavedSession = () => {
+  if (typeof window === "undefined") return null;
+
+  const savedSession = localStorage.getItem("rag-session");
+  if (!savedSession) return null;
+
+  const session = JSON.parse(savedSession);
+
+  const remaining = Math.max(
+    Math.floor((session.expiresAt - Date.now()) / 1000),
+    0,
+  );
+
+  if (remaining <= 0) {
+    localStorage.removeItem("rag-session");
+    localStorage.removeItem("rag-messages");
+    return null;
+  }
+
+  return {
+    ...session,
+    remaining,
+  };
+};
+
+const getSavedMessages = () => {
+  if (typeof window === "undefined") return [];
+
+  const savedMessages = localStorage.getItem("rag-messages");
+  return savedMessages ? JSON.parse(savedMessages) : [];
+};
+
 const RAGPDF = () => {
+  const [savedSession] = useState(getSavedSession);
   const fileInputRef = useRef(null);
   const [file, setFile] = useState(null);
-  const [sessionId, setSessionId] = useState("");
-  const [documentId, setDocumentId] = useState("");
-  const [uploadMeta, setUploadMeta] = useState(null);
+  const [sessionId, setSessionId] = useState(savedSession?.sessionId || "");
+  const [documentId, setDocumentId] = useState(savedSession?.documentId || "");
+  const [expiresAt, setExpiresAt] = useState(savedSession?.expiresAt || null);
+  const [hasReceivedToken, setHasReceivedToken] = useState(false);
+  const [uploadMeta, setUploadMeta] = useState(
+    savedSession?.uploadMeta || null,
+  );
+  const [questionStats, setQuestionStats] = useState(
+    savedSession?.questionStats || {
+      used: 0,
+      remaining: 0,
+      max: 0,
+    },
+  );
+  const [messages, setMessages] = useState(getSavedMessages);
+  const [sessionSecondsRemaining, setSessionSecondsRemaining] = useState(
+    savedSession?.remaining ?? null,
+  );
   const [isStreaming, setIsStreaming] = useState(false);
-  const [questionStats, setQuestionStats] = useState({
-    used: 0,
-    remaining: 0,
-    max: 0,
-  });
+
   const [question, setQuestion] = useState("");
-  const [messages, setMessages] = useState([]);
-  const [sessionSecondsRemaining, setSessionSecondsRemaining] = useState(null);
   const [error, setError] = useState("");
 
   const uploadMutation = useUploadPdf();
-  const askMutation = useAskQuestion();
+
+  useEffect(() => {
+    if (!sessionId || !documentId) return;
+
+    localStorage.setItem(
+      "rag-session",
+      JSON.stringify({
+        sessionId,
+        documentId,
+        uploadMeta,
+        questionStats,
+        expiresAt,
+      }),
+    );
+  }, [sessionId, documentId, uploadMeta, questionStats, expiresAt]);
 
   const fileUploaded = Boolean(sessionId && documentId);
   const canAsk =
@@ -94,6 +149,9 @@ const RAGPDF = () => {
       setDocumentId("");
       setSessionSecondsRemaining(null);
       setError("");
+      localStorage.removeItem("rag-session");
+      localStorage.removeItem("rag-messages");
+      setExpiresAt(null);
     }
   };
 
@@ -107,83 +165,14 @@ const RAGPDF = () => {
     setMessages([]);
     setSessionSecondsRemaining(null);
     setError("");
+    setExpiresAt(null);
+    localStorage.removeItem("rag-session");
+    localStorage.removeItem("rag-messages");
 
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
   };
-
-  // const handleAskQuestion = () => {
-  //   const trimmedQuestion = question.trim();
-
-  //   if (!trimmedQuestion) {
-  //     setError("Please enter a question.");
-  //     return;
-  //   }
-
-  //   if (!fileUploaded) {
-  //     setError("Please upload a PDF first.");
-  //     return;
-  //   }
-
-  //   if (questionStats.remaining <= 0) {
-  //     setError("Question limit reached for this PDF.");
-  //     return;
-  //   }
-
-  //   if (sessionSecondsRemaining <= 0) {
-  //     setError("Session expired. Please upload the PDF again.");
-  //     return;
-  //   }
-
-  //   const userMessage = {
-  //     id: crypto.randomUUID(),
-  //     role: "user",
-  //     content: trimmedQuestion,
-  //   };
-
-  //   setMessages((currentMessages) => [...currentMessages, userMessage]);
-  //   setQuestion("");
-  //   setError("");
-
-  //   const payload = {
-  //     question: trimmedQuestion,
-  //     sessionId,
-  //     documentId,
-  //   };
-
-  //   askMutation.mutate(payload, {
-  //     onSuccess: ({ data }) => {
-  //       const { answer, questionsUsed, questionsRemaining, sources = [] } = data;
-
-  //       setMessages((currentMessages) => [
-  //         ...currentMessages,
-  //         {
-  //           id: crypto.randomUUID(),
-  //           role: "assistant",
-  //           content: answer,
-  //           sources,
-  //         },
-  //       ]);
-
-  //       setQuestionStats((currentStats) => ({
-  //         used: questionsUsed ?? currentStats.used,
-  //         remaining: questionsRemaining ?? currentStats.remaining,
-  //         max:
-  //           currentStats.max ||
-  //           (questionsUsed ?? 0) + (questionsRemaining ?? 0),
-  //       }));
-  //     },
-
-  //     onError: (error) => {
-  //       setMessages((currentMessages) =>
-  //         currentMessages.filter((message) => message.id !== userMessage.id),
-  //       );
-
-  //       setError(error.response?.data?.detail || "Failed to get answer.");
-  //     },
-  //   });
-  // };
 
   const handleAskQuestion = () => {
     const trimmedQuestion = question.trim();
@@ -198,19 +187,13 @@ const RAGPDF = () => {
 
     const assistantId = crypto.randomUUID();
 
-    setMessages((prev) => [
-      ...prev,
-      userMessage,
-      {
-        id: assistantId,
-        role: "assistant",
-        content: "",
-        sources: [],
-      },
-    ]);
+    setMessages((prev) => [...prev, userMessage]);
 
     setQuestion("");
     setError("");
+    setIsStreaming(true);
+
+    setHasReceivedToken(false);
     setIsStreaming(true);
 
     const wsUrl = process.env.NEXT_PUBLIC_API_URL.replace(
@@ -234,13 +217,28 @@ const RAGPDF = () => {
       const data = JSON.parse(event.data);
 
       if (data.type === "token") {
-        setMessages((prev) =>
-          prev.map((msg) =>
+        setHasReceivedToken(true);
+        setMessages((prev) => {
+          const assistantExists = prev.some((msg) => msg.id === assistantId);
+
+          if (!assistantExists) {
+            return [
+              ...prev,
+              {
+                id: assistantId,
+                role: "assistant",
+                content: data.content,
+                sources: [],
+              },
+            ];
+          }
+
+          return prev.map((msg) =>
             msg.id === assistantId
               ? { ...msg, content: msg.content + data.content }
               : msg,
-          ),
-        );
+          );
+        });
       }
 
       if (data.type === "done") {
@@ -286,6 +284,25 @@ const RAGPDF = () => {
         setSessionId(data.sessionId);
         setUploadMeta(data);
 
+        const expiresAt = Date.now() + data.expiresInSeconds * 1000;
+
+        setExpiresAt(expiresAt);
+
+        localStorage.setItem(
+          "rag-session",
+          JSON.stringify({
+            sessionId: data.sessionId,
+            documentId: data.documentId,
+            uploadMeta: data,
+            questionStats: {
+              used: 0,
+              remaining: data.maxQuestions,
+              max: data.maxQuestions,
+            },
+            expiresAt,
+          }),
+        );
+
         setQuestionStats({
           used: 0,
           remaining: data.maxQuestions ?? 0,
@@ -317,6 +334,10 @@ const RAGPDF = () => {
       handleAskQuestion();
     }
   };
+
+  useEffect(() => {
+    localStorage.setItem("rag-messages", JSON.stringify(messages));
+  }, [messages]);
 
   return (
     <main className="h-screen overflow-hidden bg-[#f7f7f8] text-[#111827]">
@@ -529,7 +550,7 @@ const RAGPDF = () => {
                     </article>
                   ))}
 
-                  {isStreaming && (
+                  {isStreaming && !hasReceivedToken && (
                     <article className="flex gap-4">
                       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-[#10a37f] text-sm font-semibold text-white">
                         <Bot className="h-4 w-4" aria-hidden="true" />
@@ -548,7 +569,7 @@ const RAGPDF = () => {
 
               {error && (
                 <div className="mt-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                  {/* {error} */}
+                  {error}
                 </div>
               )}
             </div>
