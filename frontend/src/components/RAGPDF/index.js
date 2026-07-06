@@ -13,6 +13,8 @@ import {
   SendHorizontal,
   Trash2,
   Upload,
+  ChevronsDown,
+  Factory,
 } from "lucide-react";
 
 const MAX_FILE_SIZE_LABEL = "10 MB";
@@ -62,11 +64,14 @@ const getSavedMessages = () => {
 const RAGPDF = () => {
   const [savedSession] = useState(getSavedSession);
   const fileInputRef = useRef(null);
+  const chatContainerRef = useRef(null);
+  const bottomRef = useRef(null);
   const [file, setFile] = useState(null);
   const [sessionId, setSessionId] = useState(savedSession?.sessionId || "");
   const [documentId, setDocumentId] = useState(savedSession?.documentId || "");
   const [expiresAt, setExpiresAt] = useState(savedSession?.expiresAt || null);
   const [hasReceivedToken, setHasReceivedToken] = useState(false);
+  const [showScrollButton, setShowScrollButton] = useState(false);
   const [uploadMeta, setUploadMeta] = useState(
     savedSession?.uploadMeta || null,
   );
@@ -149,6 +154,7 @@ const RAGPDF = () => {
       setDocumentId("");
       setSessionSecondsRemaining(null);
       setError("");
+      setShowScrollButton(false);
       localStorage.removeItem("rag-session");
       localStorage.removeItem("rag-messages");
       setExpiresAt(null);
@@ -166,6 +172,7 @@ const RAGPDF = () => {
     setSessionSecondsRemaining(null);
     setError("");
     setExpiresAt(null);
+    setShowScrollButton(false);
     localStorage.removeItem("rag-session");
     localStorage.removeItem("rag-messages");
 
@@ -335,9 +342,26 @@ const RAGPDF = () => {
     }
   };
 
+  const scrollToBottom = () => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  const handleChatScroll = () => {
+    const el = chatContainerRef.current;
+    if (!el) return;
+
+    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    setShowScrollButton(!isNearBottom);
+  };
+
   useEffect(() => {
     localStorage.setItem("rag-messages", JSON.stringify(messages));
   }, [messages]);
+
+  useEffect(() => {
+    if (!isStreaming) return;
+    scrollToBottom();
+  }, [messages, isStreaming]);
 
   return (
     <main className="h-screen overflow-hidden bg-[#f7f7f8] text-[#111827]">
@@ -503,7 +527,11 @@ const RAGPDF = () => {
             </div>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-6">
+          <div
+            ref={chatContainerRef}
+            onScroll={handleChatScroll}
+            className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-6"
+          >
             <div className="mx-auto max-w-3xl">
               {messages.length === 0 ? (
                 <div className="flex min-h-[45vh] flex-col items-center justify-center text-center">
@@ -571,6 +599,16 @@ const RAGPDF = () => {
                 <div className="mt-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                   {error}
                 </div>
+              )}
+              <div ref={bottomRef} />
+              {showScrollButton && (
+                <button
+                  onClick={scrollToBottom}
+                  className="sticky bottom-4 left-1/2 z-20 -translate-x-1/2 rounded-full border border-[#d1d5db] bg-white px-4 py-2 text-xs font-medium text-[#374151] shadow-md hover:bg-[#f3f4f6] cursor-pointer"
+                >
+                  <ChevronsDown className="inline-block mr-1" /> Scroll to
+                  latest
+                </button>
               )}
             </div>
           </div>
