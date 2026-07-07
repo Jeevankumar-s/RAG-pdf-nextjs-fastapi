@@ -14,7 +14,6 @@ import {
   Trash2,
   Upload,
   ChevronsDown,
-  Factory,
 } from "lucide-react";
 
 const MAX_FILE_SIZE_LABEL = "10 MB";
@@ -364,10 +363,10 @@ const RAGPDF = () => {
   }, [messages, isStreaming]);
 
   return (
-    <main className="h-screen overflow-hidden bg-[#f7f7f8] text-[#111827]">
-      <div className="flex h-full w-full flex-col overflow-hidden lg:flex-row">
+    <main className="min-h-dvh bg-[#f7f7f8] text-[#111827] lg:h-dvh lg:overflow-hidden">
+      <div className="flex min-h-dvh w-full flex-col lg:h-full lg:min-h-0 lg:flex-row lg:overflow-hidden">
         <aside className="shrink-0 border-b border-[#e5e7eb] bg-[#202123] text-white lg:h-full lg:w-80 lg:border-b-0 lg:border-r lg:border-[#303139]">
-          <div className="flex h-full flex-col overflow-y-auto p-4">
+          <div className="flex flex-col p-3 sm:p-4 lg:h-full lg:overflow-y-auto">
             <div>
               <div className="flex items-center gap-2">
                 <Bot className="h-5 w-5 text-[#10a37f]" aria-hidden="true" />
@@ -378,7 +377,7 @@ const RAGPDF = () => {
               </p>
             </div>
 
-            <div className="mt-5 rounded-lg border border-[#3f4048] bg-[#2a2b32] p-4">
+            <div className="mt-4 rounded-lg border border-[#3f4048] bg-[#2a2b32] p-3 sm:p-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="flex items-center gap-1.5 text-xs uppercase tracking-wide text-[#8e8ea0]">
@@ -394,7 +393,7 @@ const RAGPDF = () => {
                 </span>
               </div>
 
-              <label className="mt-4 flex cursor-pointer flex-col rounded-md border border-dashed border-[#565869] px-4 py-5 text-center text-sm text-[#d1d5db] transition hover:border-white hover:bg-[#343541]">
+              <label className="mt-3 flex cursor-pointer flex-col rounded-md border border-dashed border-[#565869] px-4 py-4 text-center text-sm text-[#d1d5db] transition hover:border-white hover:bg-[#343541] sm:mt-4 sm:py-5">
                 <Upload className="mx-auto mb-2 h-5 w-5" aria-hidden="true" />
                 <span>{file ? "Change PDF" : "Choose PDF"}</span>
                 <span className="mt-1 text-xs text-[#8e8ea0]">
@@ -410,12 +409,12 @@ const RAGPDF = () => {
                 />
               </label>
 
-              <div className="mt-4 grid grid-cols-2 gap-2">
+              <div className="mt-3 grid grid-cols-2 gap-2 sm:mt-4">
                 <button
                   data-testid="upload-button"
                   onClick={handleSubmit}
                   disabled={!file || uploadMutation.isPending}
-                  className="flex items-center justify-center gap-2 rounded-md bg-white px-4 py-2 text-sm font-medium text-[#202123] transition hover:bg-[#ececf1] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+                  className="flex cursor-pointer items-center justify-center gap-2 rounded-md bg-white px-3 py-2 text-sm font-medium text-[#202123] transition hover:bg-[#ececf1] disabled:cursor-not-allowed disabled:opacity-50 sm:px-4"
                 >
                   {uploadMutation.isPending ? (
                     <Loader2
@@ -431,7 +430,7 @@ const RAGPDF = () => {
                   data-testid="delete-button"
                   onClick={handleFileDelete}
                   disabled={!file && !fileUploaded}
-                  className="flex items-center justify-center gap-2 rounded-md border border-[#565869] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#343541] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+                  className="flex cursor-pointer items-center justify-center gap-2 rounded-md border border-[#565869] px-3 py-2 text-sm font-medium text-white transition hover:bg-[#343541] disabled:cursor-not-allowed disabled:opacity-50 sm:px-4"
                 >
                   <Trash2 className="h-4 w-4" aria-hidden="true" />
                   Clear
@@ -439,49 +438,49 @@ const RAGPDF = () => {
               </div>
             </div>
 
-            <div className="mt-4 grid grid-cols-2 gap-3">
-              <div className="rounded-lg border border-[#3f4048] bg-[#2a2b32] p-3">
+            <div className="mt-3 grid grid-cols-2 gap-2 sm:mt-4 sm:gap-3">
+              <div className="rounded-lg border border-[#3f4048] bg-[#2a2b32] p-2.5 sm:p-3">
                 <p className="flex items-center gap-1.5 text-xs text-[#8e8ea0]">
                   <HelpCircle className="h-3.5 w-3.5" aria-hidden="true" />
                   Available questions
                 </p>
-                <p className="mt-1 text-2xl font-semibold">
+                <p className="mt-1 text-xl font-semibold sm:text-2xl">
                   {questionStats.remaining}
                 </p>
               </div>
-              <div className="rounded-lg border border-[#3f4048] bg-[#2a2b32] p-3">
+              <div className="rounded-lg border border-[#3f4048] bg-[#2a2b32] p-2.5 sm:p-3">
                 <p className="flex items-center gap-1.5 text-xs text-[#8e8ea0]">
                   <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
                   Questions used
                 </p>
-                <p className="mt-1 text-2xl font-semibold">
+                <p className="mt-1 text-xl font-semibold sm:text-2xl">
                   {questionStats.used}
                   <span className="text-sm font-normal text-[#8e8ea0]">
                     /{questionStats.max || uploadMeta?.maxQuestions || 0}
                   </span>
                 </p>
               </div>
-              <div className="rounded-lg border border-[#3f4048] bg-[#2a2b32] p-3">
+              <div className="rounded-lg border border-[#3f4048] bg-[#2a2b32] p-2.5 sm:p-3">
                 <p className="flex items-center gap-1.5 text-xs text-[#8e8ea0]">
                   <HelpCircle className="h-3.5 w-3.5" aria-hidden="true" />
                   Max questions
                 </p>
-                <p className="mt-1 text-2xl font-semibold">
+                <p className="mt-1 text-xl font-semibold sm:text-2xl">
                   {questionStats.max || uploadMeta?.maxQuestions || 0}
                 </p>
               </div>
-              <div className="rounded-lg border border-[#3f4048] bg-[#2a2b32] p-3">
+              <div className="rounded-lg border border-[#3f4048] bg-[#2a2b32] p-2.5 sm:p-3">
                 <p className="flex items-center gap-1.5 text-xs text-[#8e8ea0]">
                   <FileText className="h-3.5 w-3.5" aria-hidden="true" />
                   Max file size
                 </p>
-                <p className="mt-1 text-2xl font-semibold">
+                <p className="mt-1 text-xl font-semibold sm:text-2xl">
                   {MAX_FILE_SIZE_LABEL}
                 </p>
               </div>
             </div>
 
-            <div className="mt-4 rounded-lg border border-[#3f4048] bg-[#2a2b32] p-3 text-sm text-[#d1d5db]">
+            <div className="mt-3 rounded-lg border border-[#3f4048] bg-[#2a2b32] p-2.5 text-sm text-[#d1d5db] sm:mt-4 sm:p-3">
               <div className="flex justify-between gap-4">
                 <span className="flex items-center gap-1.5 text-[#8e8ea0]">
                   <FileText className="h-4 w-4" aria-hidden="true" />
@@ -507,7 +506,7 @@ const RAGPDF = () => {
           </div>
         </aside>
 
-        <section className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <section className="flex min-h-[65dvh] flex-1 flex-col lg:min-h-0 lg:overflow-hidden">
           <div className="shrink-0 border-b border-[#e5e7eb] bg-white px-4 py-3 sm:px-6">
             <div className="mx-auto flex max-w-3xl items-center justify-between gap-4">
               <div>
