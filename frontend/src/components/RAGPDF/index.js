@@ -15,6 +15,8 @@ import {
   Upload,
   ChevronsDown,
 } from "lucide-react";
+import { FaGithubSquare } from "react-icons/fa";
+
 
 const MAX_FILE_SIZE_LABEL = "10 MB";
 
@@ -520,9 +522,21 @@ const RAGPDF = () => {
                     : "Upload a PDF to start"}
                 </p>
               </div>
-              <span className="rounded-full border border-[#d1d5db] px-3 py-1 text-xs text-[#374151]">
-                {statusLabel}
-              </span>
+              <div className="flex items-center gap-2">
+                <a
+                  href="https://github.com/Jeevankumar-s/RAG-pdf-nextjs-fastapi"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 rounded-md border border-[#d1d5db] px-3 py-1.5 text-xs font-medium text-[#374151] transition hover:bg-[#f3f4f6]"
+                  aria-label="View RAG PDF project on GitHub"
+                >
+                  <FaGithubSquare className="h-4 w-4" aria-hidden="true" />
+                  <span className="hidden sm:inline">GitHub</span>
+                </a>
+                <span className="rounded-full border border-[#d1d5db] px-3 py-1 text-xs text-[#374151]">
+                  {statusLabel}
+                </span>
+              </div>
             </div>
           </div>
 
